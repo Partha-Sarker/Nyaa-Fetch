@@ -18,6 +18,7 @@ On first run the script creates a virtual environment and installs dependencies 
 |----------|-------------|
 | `url` | Nyaa.si search or browse page URL |
 | `--dir` | Directory to save `.torrent` files into. Defaults to `downloads/<first torrent title>`. |
+| `--filter` | Only download torrents whose title contains this string (case-insensitive). |
 
 ## Examples
 
@@ -27,6 +28,9 @@ On first run the script creates a virtual environment and installs dependencies 
 
 # Custom output directory
 ./nyaa-fetch.sh "https://nyaa.si/?f=0&c=1_2&q=one+piece" --dir ./one-piece-torrents
+
+# Only download 1080p WEBRip releases
+./nyaa-fetch.sh "https://nyaa.si/?f=0&c=1_2&q=one+piece" --filter "1080p WEBRip"
 ```
 
 The script prints each downloaded file path and skips files that already exist in the output directory.
