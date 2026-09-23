@@ -1,9 +1,11 @@
 import argparse
+import concurrent.futures
 import re
 import sys
 from pathlib import Path
 
 import requests
+from requests.adapters import HTTPAdapter
 from bs4 import BeautifulSoup
 
 BASE_URL = "https://nyaa.si"
@@ -30,15 +32,17 @@ def parse_rows(soup):
     return results
 
 
-def download(title, url, out_dir):
+def download(session, title, url, out_dir):
     dest = out_dir / f"{title}.torrent"
     if dest.exists():
-        print(f"  skip (exists): {dest}")
-        return
-    response = requests.get(url, headers=HEADERS, stream=True)
-    response.raise_for_status()
-    dest.write_bytes(response.content)
-    print(f"  downloaded: {dest}")
+        return ("skip", dest, None)
+    try:
+        response = session.get(url, stream=True, timeout=30)
+        response.raise_for_status()
+        dest.write_bytes(response.content)
+        return ("downloaded", dest, None)
+    except Exception as e:
+        return ("failed", dest, str(e))
 
 
 def main():
@@ -46,9 +50,26 @@ def main():
     parser.add_argument("url", help="Nyaa.si search or browse page URL")
     parser.add_argument("--dir", dest="out_dir", help="Output directory (default: first torrent title)")
     parser.add_argument("--filter", dest="filter_str", help="Only download torrents whose title contains this string (case-insensitive)")
+    parser.add_argument(
+        "-t",
+        "--threads",
+        dest="threads",
+        type=int,
+        default=5,
+        help="Number of concurrent download threads (default: 5)",
+    )
     args = parser.parse_args()
 
-    response = requests.get(args.url, headers=HEADERS)
+    if args.threads < 1:
+        parser.error("--threads must be at least 1")
+
+    session = requests.Session()
+    session.headers.update(HEADERS)
+    adapter = HTTPAdapter(pool_connections=args.threads, pool_maxsize=args.threads)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+
+    response = session.get(args.url, timeout=30)
     response.raise_for_status()
 
     soup = BeautifulSoup(response.text, "html.parser")
@@ -69,10 +90,35 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
     print(f"Saving to: {out_dir}/\n")
 
-    for title, url in rows:
-        download(title, url, out_dir)
+    downloaded_count = 0
+    skipped_count = 0
+    failed_count = 0
 
-    print(f"\nDone. {len(rows)} torrent(s) processed.")
+    max_workers = min(args.threads, len(rows))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_torrent = {
+            executor.submit(download, session, title, url, out_dir): (title, url)
+            for title, url in rows
+        }
+        for future in concurrent.futures.as_completed(future_to_torrent):
+            status, dest, err = future.result()
+            if status == "downloaded":
+                print(f"  downloaded: {dest}")
+                downloaded_count += 1
+            elif status == "skip":
+                print(f"  skip (exists): {dest}")
+                skipped_count += 1
+            elif status == "failed":
+                print(f"  failed: {dest} ({err})")
+                failed_count += 1
+
+    summary_parts = [f"{downloaded_count} downloaded", f"{skipped_count} skipped"]
+    if failed_count:
+        summary_parts.append(f"{failed_count} failed")
+    print(f"\nDone. {len(rows)} torrent(s) processed ({', '.join(summary_parts)}).")
+
+    if failed_count > 0:
+        sys.exit(1)
 
 
 if __name__ == "__main__":
