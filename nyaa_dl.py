@@ -2,6 +2,7 @@ import argparse
 import concurrent.futures
 import re
 import sys
+import urllib.parse
 from pathlib import Path
 
 import requests
@@ -18,7 +19,7 @@ def sanitize(name):
     return re.sub(r'[/\\:*?"<>|]', "_", name).strip()
 
 
-def parse_rows(soup):
+def parse_rows(soup, current_url=BASE_URL):
     results = []
     for row in soup.select("tr"):
         view_link = row.select_one("a[href^='/view/']:not(.comments)")
@@ -27,9 +28,19 @@ def parse_rows(soup):
             continue
         title = view_link.get("title") or view_link.get_text(strip=True)
         href = dl_link["href"]
-        url = href if href.startswith("http") else BASE_URL + href
+        url = urllib.parse.urljoin(current_url, href)
         results.append((sanitize(title), url))
     return results
+
+
+def get_next_page_url(soup, current_url):
+    next_li = soup.select_one("ul.pagination li.next")
+    if not next_li or "disabled" in next_li.get("class", []):
+        return None
+    a_tag = next_li.find("a", href=True)
+    if not a_tag or not a_tag.get("href"):
+        return None
+    return urllib.parse.urljoin(current_url, a_tag["href"])
 
 
 def download(session, title, url, out_dir):
@@ -51,6 +62,13 @@ def main():
     parser.add_argument("--dir", dest="out_dir", help="Output directory (default: first torrent title)")
     parser.add_argument("--filter", dest="filter_str", help="Only download torrents whose title contains this string (case-insensitive)")
     parser.add_argument(
+        "--max-pages",
+        dest="max_pages",
+        type=int,
+        default=None,
+        help="Maximum number of pages to fetch (default: all pages)",
+    )
+    parser.add_argument(
         "-t",
         "--threads",
         dest="threads",
@@ -62,6 +80,8 @@ def main():
 
     if args.threads < 1:
         parser.error("--threads must be at least 1")
+    if args.max_pages is not None and args.max_pages < 1:
+        parser.error("--max-pages must be at least 1")
 
     session = requests.Session()
     session.headers.update(HEADERS)
@@ -69,15 +89,52 @@ def main():
     session.mount("http://", adapter)
     session.mount("https://", adapter)
 
-    response = session.get(args.url, timeout=30)
-    response.raise_for_status()
+    rows = []
+    seen_urls = set()
+    current_url = args.url
+    page_num = 1
 
-    soup = BeautifulSoup(response.text, "html.parser")
-    rows = parse_rows(soup)
+    while current_url:
+        print(f"[Page {page_num}] Fetching: {current_url}")
+        try:
+            response = session.get(current_url, timeout=30)
+            response.raise_for_status()
+        except Exception as e:
+            if page_num == 1:
+                print(f"Failed to fetch initial page: {e}")
+                sys.exit(1)
+            else:
+                print(f"Failed to fetch page {page_num} ({e}), stopping pagination.")
+                break
+
+        soup = BeautifulSoup(response.text, "html.parser")
+        page_rows = parse_rows(soup, current_url)
+
+        new_count = 0
+        for title, url in page_rows:
+            if url not in seen_urls:
+                seen_urls.add(url)
+                rows.append((title, url))
+                new_count += 1
+
+        print(f"  Found {len(page_rows)} torrent(s) on page {page_num} ({new_count} new).")
+
+        if args.max_pages and page_num >= args.max_pages:
+            print(f"Reached page limit (--max-pages {args.max_pages}).")
+            break
+
+        next_url = get_next_page_url(soup, current_url)
+        if not next_url or next_url == current_url:
+            break
+
+        current_url = next_url
+        page_num += 1
 
     if not rows:
-        print("No torrent links found on that page.")
+        print("No torrent links found.")
         sys.exit(1)
+
+    print(f"\nTotal: {len(rows)} torrent(s) found across {page_num} page(s).")
 
     if args.filter_str:
         needle = args.filter_str.lower()
@@ -85,6 +142,7 @@ def main():
         if not rows:
             print(f"No torrents matched filter: {args.filter_str!r}")
             sys.exit(1)
+        print(f"Filtered down to {len(rows)} torrent(s) matching: {args.filter_str!r}")
 
     out_dir = Path(args.out_dir) if args.out_dir else Path("downloads") / rows[0][0]
     out_dir.mkdir(parents=True, exist_ok=True)

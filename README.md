@@ -19,7 +19,7 @@ Downloads all torrent files listed on a Nyaa.si search/browse page.
 Simply run the script with a Nyaa.si URL:
 
 ```bash
-./nyaa-fetch.sh <url> [--dir <output_dir>] [--filter <substring>] [-t <threads>]
+./nyaa-fetch.sh <url> [--dir <output_dir>] [--filter <substring>] [--max-pages <num>] [-t <threads>]
 ```
 
 On first run (or if the virtual environment is missing/broken), `nyaa-fetch.sh` does all the heavy lifting automatically:
@@ -48,7 +48,7 @@ source .venv/bin/activate      # macOS / Linux
 pip install -r requirements.txt
 
 # 4. Run the script
-python3 nyaa_dl.py <url> [--dir <output_dir>] [--filter <substring>] [-t <threads>]
+python3 nyaa_dl.py <url> [--dir <output_dir>] [--filter <substring>] [--max-pages <num>] [-t <threads>]
 ```
 
 ---
@@ -60,19 +60,23 @@ python3 nyaa_dl.py <url> [--dir <output_dir>] [--filter <substring>] [-t <thread
 | `url` | Nyaa.si search or browse page URL |
 | `--dir` | Directory to save `.torrent` files into. Defaults to `downloads/<first torrent title>`. |
 | `--filter` | Only download torrents whose title contains this string (case-insensitive). |
+| `--max-pages` | Maximum number of pages to fetch (default: all pages). |
 | `-t`, `--threads` | Number of concurrent download threads (default: `5`). |
 
 ## Examples
 
 ```bash
-# Auto-named directory under downloads/ (defaults to 5 concurrent threads)
+# Auto-named directory under downloads/ (defaults to 5 concurrent threads, traverses all result pages)
 ./nyaa-fetch.sh "https://nyaa.si/?f=0&c=1_2&q=%5BJudas%5D+Dia+no+Ace+-+S04"
 
 # Custom output directory
 ./nyaa-fetch.sh "https://nyaa.si/?f=0&c=1_2&q=one+piece" --dir ./one-piece-torrents
 
-# Only download 1080p WEBRip releases
+# Only download 1080p WEBRip releases across all pages
 ./nyaa-fetch.sh "https://nyaa.si/?f=0&c=1_2&q=one+piece" --filter "1080p WEBRip"
+
+# Limit search results to the first 2 pages
+./nyaa-fetch.sh "https://nyaa.si/?f=0&c=1_2&q=one+piece" --max-pages 2
 
 # Faster parallel download with 16 threads
 ./nyaa-fetch.sh "https://nyaa.si/?f=0&c=1_2&q=one+piece" -t 16
